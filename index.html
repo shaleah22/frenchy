@@ -272,6 +272,12 @@ form.typed input.wrong{color:var(--ink-soft)}
 .tapbtn.on{color:var(--surface);background:var(--ink);text-decoration:none;border-radius:999px;padding:2px 10px}
 .tap .options{flex:1 1 auto;max-height:52cqh}
 .cloze .hl{color:var(--margin);font-weight:700}
+.meaning .hl,.dir .hl{color:var(--margin);font-family:var(--f-word);font-weight:700}
+.dir .hl{text-transform:none;letter-spacing:0;font-size:1.15em}
+.sentq .play{width:clamp(60px,min(17cqi,17cqh),130px);height:clamp(60px,min(17cqi,17cqh),130px);box-shadow:0 4px 0 var(--rule-strong)}
+.meet .options,.sentq .options{max-height:56cqh}
+.qtop .ladder{flex:1 1 auto;min-width:0}
+.sentq #sqEn,.meet #sqEn{font-size:clamp(1rem,min(4.2cqi,4.2cqh),1.9rem)}
 .sb-en{font-size:clamp(1.1rem,min(5cqi,5cqh),2.4rem);color:var(--ink);font-weight:600}
 .sb-line{margin:0;font-family:var(--f-word);font-size:clamp(1.3rem,min(6.2cqi,6.5cqh),3.4rem);line-height:1.6;display:flex;flex-wrap:wrap;gap:.25em .35em;align-items:flex-end;min-height:1.6em}
 .sb-line.done{display:block;color:var(--good)}
@@ -398,8 +404,10 @@ const BASE = [
    ex:"J'ai dormi pendant le film.", exEn:"I slept during the film.",
    cloze:"Il a plu ___ tout le week-end.", clozeEn:"It rained during the whole weekend."}
 ];
-const STAGES = ["See it","Spot it","Build it","Hear it","Type it","Use it","Translate"];
-const TYPES = ["mcEn","mcFr","build","hear","type","cloze","toEn"], TYPE_LVL = 4;
+/* every step puts the word in a French sentence: read it or hear it, then pick what the word means */
+const STAGES = ["Read","Listen","Read","Fill","Listen"];
+const TYPES = ["mcEn","ear","mcEn","mcFr","ear"], TYPE_LVL = 2;
+const SENT_KINDS = ["mcEn","mcFr","ear"];
 let WORDS = BASE.slice();
 const MAX = STAGES.length, SET = 4, POOL = SET, KEY = "dixmots-v3";
 const $ = s => document.querySelector(s);
@@ -408,11 +416,17 @@ let S, t0 = Date.now(), locked = false, interacted = false;
 document.addEventListener("pointerdown", () => interacted = true, {once:true});
 document.addEventListener("keydown", () => interacted = true, {once:true});
 
-function fresh(){ return {mode:"start", set:0, items:WORDS.map(()=>({level:0,wrong:0,in:false,box:-1,due:0})), pool:[], nextIntro:0, last:-1, total:0, right:0, elapsed:0, cur:null, review:null, extra:(S && S.extra) || [], steps7:true, setSize:SET, known:(S && S.known) || [], unknownQ:(S && S.unknownQ) || [], listFrom:(S && S.listFrom!=null) ? S.listFrom : 300}; }
+function fresh(){ return {mode:"start", set:0, items:WORDS.map(()=>({level:0,wrong:0,in:false,box:-1,due:0})), pool:[], nextIntro:0, last:-1, total:0, right:0, elapsed:0, cur:null, review:null, extra:(S && S.extra) || [], steps7:true, sent5:true, setSize:SET, known:(S && S.known) || [], unknownQ:(S && S.unknownQ) || [], listFrom:(S && S.listFrom!=null) ? S.listFrom : 300}; }
 function save(){ S.savedAt = Date.now(); try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){} if(typeof cloudSoon==="function") cloudSoon(); }
 function load(){
   const r = loadRaw();
   if(r && !r.steps7){ r.items.forEach(it => { if(it.level>=6) it.level = 7; }); r.steps7 = true; r.cur = null; }
+  /* the ladder became 5 sentence steps: map old levels (0-7) onto the new ones */
+  if(r && !r.sent5){
+    r.items.forEach(it => { it.level = it.level >= 7 ? MAX : Math.min(MAX-1, Math.round(it.level * (MAX-1) / 6)); });
+    if(r.review && r.review.fmt) Object.keys(r.review.fmt).forEach(k => r.review.fmt[k] = "mcEn");
+    r.sent5 = true; r.cur = null;
+  }
   return r;
 }
 function loadRaw(){
@@ -648,11 +662,19 @@ function renderChrome(){
 const nSets = () => Math.ceil(WORDS.length/SET);
 const setRange = k => range(k*SET, Math.min(k*SET+SET, WORDS.length));
 function stepType(lvl, w){
-  let t = TYPES[lvl];
-  if(t==="hear" && !hearOK()) t = "type";
-  if(t==="build" && /\s/.test(w.fr)) t = "type";
-  if(t==="cloze" && !w.cloze && !sentsFor(WORDS.indexOf(w)).length) t = "type";
+  let t = TYPES[lvl] || "mcEn";
+  if(t==="ear" && !hearOK()) t = "mcEn";
   return t;
+}
+/* four choices: the word plus three others that differ from it, and from each other, in meaning and in French */
+function mcOptions(idx){
+  const seenEn = new Set([normEn(meaningOf(WORDS[idx]))]), seenFr = new Set([norm(WORDS[idx].fr)]), others = [];
+  for(const i of shuffle(range(0,WORDS.length).filter(i=>i!==idx))){
+    const e = normEn(meaningOf(WORDS[i])), f = norm(WORDS[i].fr);
+    if(seenEn.has(e) || seenFr.has(f) || enMatch(WORDS[idx], meaningOf(WORDS[i]))) continue;
+    seenEn.add(e); seenFr.add(f); others.push(i); if(others.length===3) break;
+  }
+  return shuffle([idx,...others]);
 }
 const KNOW_BTN = `<button class="linkish knowbtn" id="knowQ" type="button">I know this</button>`;
 const ladder = lvl => `<ol class="ladder" aria-label="Steps for this word">${STAGES.map((s,k)=>`<li class="${k<lvl?"past":k===lvl?"now":""}">${s}</li>`).join("")}</ol>`;
@@ -664,7 +686,7 @@ function renderStart(){
     <div class="sets${nSets()>2?" many":""}">
       ${range(0,nSets()).map(k=>`<div lang="fr"><b>Set ${k+1}</b>${setRange(k).map(i=>`<i>${WORDS[i].fr}</i>`).join("")}</div>`).join("")}
     </div>
-    <ol class="steps">${STAGES.map(s=>`<li>${s}</li>`).join("")}</ol>
+    <ol class="steps">${["Meet it", ...STAGES].map(s=>`<li>${s}</li>`).join("")}</ol>
     <div class="actions"><button class="btn" id="go" type="button">Start<span class="enter" aria-hidden="true">↵</span></button></div>`, "start");
   $("#go").onclick = () => { const k = openOrNewSet(-1); if(k < 0){ S.mode = "done"; save(); return renderDone(); } enterSet(k); save(); next(); };
   $("#go").focus();
@@ -685,7 +707,7 @@ function next(){
     if(!toCheck.length) return finishSet();
     return startReview("check"+S.set, toCheck);
   }
-  const roomy = stepsAllowed() >= 7;   /* extras only when the time allows it */
+  const roomy = stepsAllowed() >= MAX;   /* extras only when the time allows it */
   /* every few answers, a listening question built from words you've learned */
   maybeGenSentences();
   /* every few answers: a round with several words at once (build a sentence, fill gaps, listen) */
@@ -710,21 +732,11 @@ function next(){
     let r = Math.random()*weights.reduce((a,b)=>a+b,0); idx=cand[0];
     for(let k=0;k<cand.length;k++){ r-=weights[k]; if(r<=0){ idx=cand[k]; break; } }
   }
-  const lvl = refresh ? [3,4,5,6][Math.floor(Math.random()*4)] : S.items[idx].level;
+  const lvl = refresh ? [1,2,3,4][Math.floor(Math.random()*4)] : S.items[idx].level;
   const type = stepType(lvl, WORDS[idx]);
   const cur = {type, idx, lvl, refresh};
   genContext();
-  if(["mcEn","mcFr","type","toEn","cloze"].includes(type)) cur.ctx = pickCtx(idx);
-  if(type==="mcEn" || type==="mcFr"){
-    /* distractors must differ from the answer and from each other, in meaning and in French, so only one option is right */
-    const seenEn = new Set([normEn(meaningOf(WORDS[idx]))]), seenFr = new Set([norm(WORDS[idx].fr)]), others = [];
-    for(const i of shuffle(range(0,WORDS.length).filter(i=>i!==idx))){
-      const e = normEn(meaningOf(WORDS[i])), f = norm(WORDS[i].fr);
-      if(seenEn.has(e) || seenFr.has(f) || enMatch(WORDS[idx], meaningOf(WORDS[i]))) continue;
-      seenEn.add(e); seenFr.add(f); others.push(i); if(others.length===3) break;
-    }
-    cur.options = shuffle([idx,...others]);
-  }
+  if(SENT_KINDS.includes(type)){ cur.ctx = pickCtx(idx); cur.options = mcOptions(idx); }
   if(type==="build"){ const L = WORDS[idx].fr.split(""); let t, n = 0; do{ t = shuffle(L); }while(t.join("")===L.join("") && L.length>1 && ++n < 20); cur.tiles = t; }
   S.cur = cur; save(); render();
 }
@@ -733,19 +745,25 @@ function render(){
   renderChrome();
   const c = S.cur, w = WORDS[c.idx];
   if(c.type==="learn"){
+    const x = sentsFor(c.idx)[0];
+    if(x) return renderMeet(c, w, x);
     paint("", `
       <div class="word-row"><p class="word" lang="fr">${w.fr}</p>${speakBtn(w.fr)}</div>
       <p class="meaning">${esc(meaningOf(w))}</p>
       ${hookFor(w, c.idx) ? `<p class="hook">${hookFor(w, c.idx)}</p>` : ""}
-      ${w.ex ? `<p class="ex"><span class="fr" lang="fr">${w.ex}</span>${speakBtn(w.ex,"Hear the sentence")}<span class="en">${w.exEn}</span></p>` : ""}
       <div class="actions"><button class="btn" id="got" type="button">Got it<span class="enter" aria-hidden="true">↵</span></button><button class="btn ghost" id="knowIt" type="button">I know it</button></div>`, "learn");
     $("#knowIt").onclick = () => knowIt(c.idx);
-    $("#got").onclick = () => { S.items[c.idx].in=true; if(!S.pool.includes(c.idx)) S.pool.push(c.idx); S.nextIntro = Math.max(S.nextIntro, c.idx+1); S.last=c.idx; next(); };
+    $("#got").onclick = () => gotIt(c.idx);
     $("#got").focus();
-    if(interacted){ speak(w.fr); readSentence(w.ex, true); }
+    if(interacted) speak(w.fr);
     return;
   }
   const kick = c.refresh ? `<div class="qtop"><div class="kicker"><span>Refresher</span></div>${KNOW_BTN}</div>` : `<div class="qtop">${ladder(c.lvl)}${KNOW_BTN}</div>`;
+  if(SENT_KINDS.includes(c.type)) return renderSentQ(c.type, c.idx, c.ctx, c.options, kick, ok => {
+    settle(c.idx, ok ? "up" : "down");
+    if(ok) return c.ctx ? sayThen(c.ctx.fr, next, 1400) : (speak(w.fr), setTimeout(next, 900));
+    showMiss(w, c.refresh ? "" : ladder(S.items[c.idx].level), null, c.ctx);
+  });
   if(c.type==="mcEn" || c.type==="mcFr"){
     const fr = c.type==="mcFr";
     const tag = senseTag(w) ? `<p class="dir">${senseTag(w)}</p>` : "";
@@ -783,6 +801,100 @@ function render(){
   wireTyped(w, null, c.type);
 }
 
+/* ---------- sentence questions: the word always comes inside a French sentence ---------- */
+/* mcEn: read the sentence (it is also read aloud), pick what the bold word means
+   ear:  hear the sentence (the text can be shown), pick what the word means
+   mcFr: the sentence has a gap, pick the French word that fits */
+function renderSentQ(kind, idx, x, options, top, done){
+  const w = WORDS[idx];
+  if(!options || !options.length) options = mcOptions(idx);
+  if(kind==="ear" && (!x || !hearOK())) kind = "mcEn";
+  const fr = kind==="mcFr", ear = kind==="ear";
+  const tag = senseTag(w) ? ` · ${senseTag(w)}` : "";
+  let dir, sent;
+  if(x){
+    dir = fr ? "Which word fills the gap?"
+        : ear ? `Listen for <b class="hl" lang="fr">${esc(w.fr)}</b>. What does it mean here?${tag}`
+        : `What does the word in bold mean?${tag}`;
+    sent = (ear ? `<div class="hear"><button class="play" id="play" type="button" aria-label="Play the sentence">${playSvg}</button><button class="btn ghost" id="slow" type="button">Slow</button><button class="linkish" id="showSq" type="button">Show the sentence</button></div>` : "")
+      + `<div class="ex cloze-row"><p class="cloze" id="sq" lang="fr"${ear ? " hidden" : ""}>${fr ? ctxGap(x, w.fr) : ctxBold(x, w.fr)}</p>${ear ? "" : speakBtn(fr ? ctxGapSpoken(x, w.fr) : x.fr, "Hear the sentence")}<span class="sub" id="sqEn"${fr ? "" : " hidden"}>${esc(x.en)}</span></div>`;
+  } else {
+    dir = fr ? "Which French word is it?" : `What does it mean?${tag}`;
+    sent = fr ? `<p class="prompt">${cueFor(w)}</p>` : `<div class="word-row"><p class="word" lang="fr">${esc(w.fr)}</p>${speakBtn(w.fr)}</div>`;
+  }
+  const label = o => fr ? esc(WORDS[o].fr) : esc(o===idx ? sensesFor(w)[senseIdx(idx)] : sensesFor(WORDS[o])[0]);
+  paint(top, `<p class="dir">${dir}</p>${sent}
+    <div class="options${fr ? " fr-opts" : ""}">${options.map((o,k) => `<button class="opt" type="button" data-k="${k}"${fr ? ' lang="fr"' : ""}><kbd>${k+1}</kbd>${label(o)}</button>`).join("")}</div>`, "mc sentq");
+  let answered = false;
+  if(ear){
+    $("#play").onclick = () => speak(x.fr, .9);
+    $("#slow").onclick = () => speak(x.fr, .6);
+    $("#showSq").onclick = e => { $("#sq").hidden = false; e.currentTarget.hidden = true; };
+    setTimeout(() => playUntilAnswered(x.fr, .9, () => answered), 250);
+  }
+  else if(x) setTimeout(() => readSentence(fr ? ctxGapSpoken(x, w.fr) : x.fr), 250);
+  else if(!fr) setTimeout(() => speak(w.fr), 250);
+  /* after any answer: the full sentence, the word in bold and its English translation */
+  const reveal = () => {
+    const p = $("#sq"); if(p && x){ p.hidden = false; p.innerHTML = ctxBold(x, w.fr); }
+    const b = $("#showSq"); if(b) b.hidden = true;
+    const e = $("#sqEn"); if(e) e.hidden = false;
+  };
+  const finish = (ok, btn) => {
+    answered = true; locked = true; listenKeys = null;
+    stage.querySelectorAll(".opt").forEach(el => { el.disabled = true; if(options[+el.dataset.k] === idx) el.classList.add("right"); });
+    if(btn && !ok) btn.classList.add("wrong");
+    reveal(); done(ok);
+  };
+  const choose = b => { if(answered || locked || b.disabled) return; finish(options[+b.dataset.k] === idx, b); };
+  stage.querySelectorAll(".opt").forEach(b => b.onclick = () => choose(b));
+  listenKeys = choose;
+  /* no answer for a while: take away two wrong choices, later show the answer */
+  const narrow = () => {
+    const wrong = shuffle([...stage.querySelectorAll(".opt")].filter(el => options[+el.dataset.k] !== idx && !el.disabled));
+    wrong.slice(0, Math.max(0, wrong.length - 1)).forEach(el => { el.disabled = true; el.classList.add("out"); });
+  };
+  revealIfIdle(() => answered || locked, () => finish(false, null), 16000, narrow, 9000);
+}
+/* a new word: meet it in a sentence, hear it, guess the meaning (no penalty), then see the answer */
+function renderMeet(c, w, x){
+  const i = c.idx;
+  if(c.guessed){
+    const h = hookFor(w, i);
+    paint(`<div class="kicker"><span>New word</span></div>`, `
+      <div class="ex cloze-row"><p class="cloze" lang="fr">${ctxBold(x, w.fr)}</p>${speakBtn(x.fr,"Hear the sentence")}<span class="sub">${esc(x.en)}</span></div>
+      <p class="meaning"><b class="hl" lang="fr">${esc(w.fr)}</b> = ${esc(meaningOf(w))}</p>
+      ${h ? `<p class="hook">${h}</p>` : ""}
+      <div class="actions"><button class="btn" id="got" type="button">Got it<span class="enter" aria-hidden="true">↵</span></button><button class="btn ghost" id="knowIt" type="button">I know it</button></div>`, "learn");
+    $("#knowIt").onclick = () => knowIt(i);
+    $("#got").onclick = () => gotIt(i);
+    $("#got").focus();
+    if(interacted) speak(w.fr);
+    return;
+  }
+  if(!c.options) { c.options = mcOptions(i); save(); }
+  const opts = c.options;
+  paint(`<div class="qtop"><div class="kicker qk"><span>New word</span></div><button class="linkish knowbtn" id="knowIt" type="button">I know it</button></div>`, `
+    <p class="dir">Read and listen. What do you think <b class="hl" lang="fr">${esc(w.fr)}</b> means?</p>
+    <div class="ex cloze-row"><p class="cloze" lang="fr">${ctxBold(x, w.fr)}</p>${speakBtn(x.fr,"Hear the sentence")}<span class="sub" id="sqEn" hidden>${esc(x.en)}</span></div>
+    <div class="options">${opts.map((o,k) => `<button class="opt" type="button" data-k="${k}"><kbd>${k+1}</kbd>${esc(o===i ? meaningOf(w) : sensesFor(WORDS[o])[0])}</button>`).join("")}</div>`, "mc meet");
+  $("#knowIt").onclick = () => knowIt(i);
+  if(interacted) setTimeout(() => readSentence(x.fr), 250);
+  let answered = false;
+  const choose = b => {
+    if(answered || b.disabled) return; answered = true; listenKeys = null;
+    const ok = opts[+b.dataset.k] === i;
+    stage.querySelectorAll(".opt").forEach(el => { el.disabled = true; if(opts[+el.dataset.k] === i) el.classList.add("right"); });
+    if(!ok) b.classList.add("wrong");
+    $("#sqEn").hidden = false;
+    if(ok) toast("Good guess!");
+    const card = cardNo;
+    setTimeout(() => { if(card !== cardNo) return; c.guessed = true; save(); render(); }, ok ? 1100 : 1600);
+  };
+  stage.querySelectorAll(".opt").forEach(b => b.onclick = () => choose(b));
+  listenKeys = choose;
+}
+function gotIt(i){ S.items[i].in=true; if(!S.pool.includes(i)) S.pool.push(i); S.nextIntro = Math.max(S.nextIntro, i+1); S.last=i; next(); }
 const playSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4z" fill="currentColor"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>`;
 const DIR = {type:"Write it in French", hear:"Write what you hear, in French", cloze:"Fill the gap in French", toEn:"Write it in English"};
 function typedHead(f, w){
@@ -857,7 +969,7 @@ function wireTyped(w0, onDone, f){
 }
 
 /* wrong answer: after a beat, the card turns into a re-learn card */
-function showMiss(w, top, choice){
+function showMiss(w, top, choice, x){
   setTimeout(() => {
     const i = WORDS.indexOf(w), it = S.items[i];
     /* missed twice since the last trick: offer a new memory trick */
@@ -867,14 +979,16 @@ function showMiss(w, top, choice){
     const ai = !!(sampleFn && !aiOff);
     const h = hookFor(w, i);
     paint(top||"", `
-      <div class="word-row"><p class="word" lang="fr">${w.fr}</p>${speakBtn(w.fr)}</div>
-      <p class="meaning">${esc(meaningOf(w))}</p>
+      ${x ? `<div class="ex cloze-row"><p class="cloze" lang="fr">${ctxBold(x, w.fr)}</p>${speakBtn(x.fr,"Hear the sentence")}<span class="sub">${esc(x.en)}</span></div>
+      <p class="meaning"><b class="hl" lang="fr">${esc(w.fr)}</b> = ${esc(meaningOf(w))}</p>`
+      : `<div class="word-row"><p class="word" lang="fr">${w.fr}</p>${speakBtn(w.fr)}</div>
+      <p class="meaning">${esc(meaningOf(w))}</p>`}
       ${needTrick ? trickBox(i, ai) : h ? `<p class="hook">${h}</p>` : ""}
       ${choice ? `<div class="actions"><button class="btn ghost" id="wasRight" type="button">I was right</button></div>` : ""}
       <div class="autobar" aria-hidden="true"><i></i></div>`, "miss");
     stage.classList.add("missed");
     if(needTrick) wireTrick(i, ai);
-    speak(w.fr); readSentence(w.ex, true);
+    speak(w.fr); readSentence(x ? x.fr : w.ex, true);
     const stop = autoNext(choice ? choice.wrong : next, needTrick ? 4000 : 0);   /* a new memory trick gets a little longer to read */
     if(choice) $("#wasRight").onclick = () => { stop(); choice.right(); };
   }, 700);
@@ -982,7 +1096,7 @@ function shortWhen(ts){
 /* ---------- checkpoints and reviews: misses go back in the queue ---------- */
 function startReview(kind, idxs, ret){
   const fmt = {};
-  idxs.forEach(i => { fmt[i] = kind.startsWith("check") ? "type" : shuffle(["type","toEn"].concat(hearOK()?["hear"]:[], sentsFor(i).length?["cloze"]:[]))[0]; });
+  idxs.forEach(i => { fmt[i] = kind.startsWith("check") ? "ear" : shuffle(["mcEn","mcFr","ear"])[0]; });
   S.review = {kind, ret:ret||"", queue:shuffle(idxs), n:idxs.length, misses:{}, answers:0, elapsed:0, first:{}, fmt};
   S.mode = "review"; S.cur = null; save(); next();
 }
@@ -1085,45 +1199,29 @@ function renderSetBreak(R, prev, label){
 function nextReview(){
   const R = S.review;
   if(!R.queue.length) return finishReview();
-  const idx = R.queue[0]; S.cur = {type:"review", idx};
-  { const f0 = (R.fmt && R.fmt[idx]) || "type"; if(f0==="type" || f0==="toEn" || f0==="cloze") S.cur.ctx = pickCtx(idx); }
+  const idx = R.queue[0];
+  let f = (R.fmt && R.fmt[idx]) || "mcEn"; if(!SENT_KINDS.includes(f)) f = "mcEn"; if(f==="ear" && !hearOK()) f = "mcEn";
+  S.cur = {type:"review", idx, ctx: pickCtx(idx), options: mcOptions(idx)};
   renderChrome();
   const w = WORDS[idx];
-  let f = (R.fmt && R.fmt[idx]) || "type"; if(f==="hear" && !hearOK()) f = "type";
   const label = R.kind==="full" ? "Practice" : R.kind==="due" ? "Review" : "Checkpoint";
-  const kin = `<span>${label}${f==="hear"?" · Hear it":f==="toEn"?" · Translate":""}</span><span>${R.queue.length} left</span>`;
+  const kin = `<span>${label}${f==="ear"?" · Listen":f==="mcFr"?" · Fill":""}</span><span>${R.queue.length} left</span>`;
   const top = `<div class="kicker">${kin}</div>`, topQ = `<div class="qtop"><div class="kicker qk">${kin}</div>${KNOW_BTN}</div>`;
   const record = ok => {
     const dt = Math.min(Date.now()-t0, 60000); R.elapsed += dt; S.elapsed += dt; R.answers++;
-    S.total++; if(ok){ S.right++; if(f==="toEn") markGiven(idx, lastAnswer); else advanceSense(idx); }
+    S.total++; if(ok){ S.right++; advanceSense(idx); }
     R.queue.shift();
     if(!(idx in R.first)){ R.first[idx] = ok; if(R.kind==="due") schedule(idx, ok); }
     if(!ok) S.items[idx].known = false;
     if(!ok){ R.misses[idx]=(R.misses[idx]||0)+1; S.items[idx].wrong++; R.queue.splice(Math.min(2,R.queue.length),0,idx); }
     save(); renderChrome();
   };
-  if(tapMode) return renderTap(f, w, idx, topQ, ok => {   /* the tap card sets up its own audio and gap sentence */
+  const x = S.cur.ctx;
+  renderSentQ(f, idx, x, S.cur.options, topQ, ok => {
     record(ok);
-    if(ok){ if(S.cur.ctx) return sayThen(S.cur.ctx.fr, next, 550); if(f==="cloze") return sayThen(filled(w), next, 550); speak(w.fr); return setTimeout(next, 550); }
-    showMiss(w, top);
+    if(ok) return x ? sayThen(x.fr, next, 1200) : (speak(w.fr), setTimeout(next, 800));
+    showMiss(w, top, null, x);
   });
-  paint(topQ, typedHead(f, w) + typedForm(f), "typed");
-  { const x = S.cur.ctx; if(x && f!=="cloze") setTimeout(() => readSentence(f==="type" ? ctxGapSpoken(x, w.fr) : x.fr), 250); }
-  if(f==="hear") wireHear(w);
-  if(f==="cloze") setTimeout(() => readSentence(S.cur.ctx ? ctxGapSpoken(S.cur.ctx, w.fr) : gapped(w)), 250);
-  wireTyped(w, async (v, inp) => {
-    locked = true;
-    lastAnswer = v;
-    let ok = isRight(f, askWord(f, w), v);
-    const gaveUp = !v;
-    if(!ok && !gaveUp && englishInstead(f, w, v, inp)) return;
-    if(!ok && !gaveUp && f==="toEn"){ inp.readOnly = true; ok = await judgeEn(w, v); }
-    inp.readOnly = true; inp.classList.add(ok?"right":"wrong");
-    const h=$("#hint"); if(h) h.hidden=true;
-    if(ok){ record(true); if(S.cur.ctx) return sayThen(S.cur.ctx.fr, next, 550); if(f==="cloze") return sayThen(filled(w), next, 550); if(S.cur.ctx) return sayThen(S.cur.ctx.fr, next, 550); speak(w.fr); return setTimeout(next, 550); }
-    if(f==="toEn" && !gaveUp) return showMiss(w, top, { wrong: () => { record(false); next(); }, right: () => { record(true); next(); } });
-    record(false); showMiss(w, top);
-  }, f);
 }
 
 /* ---------- home: what's due, when the next review is ---------- */
@@ -1634,14 +1732,14 @@ setInterval(() => {
   if(S.sess.used >= SESSION) S.sess.over = true;   /* finishes the current card, then the set ends */
   save(); showTimer();
 }, 1000);
-/* which steps fit in the time left: drop the easier steps first, keep See, Type and Translate */
-const KEEP = [0, 4, 6, 5, 3, 1, 2];
+/* which steps fit in the time left: drop steps from the middle first, keep the first Read and the last Listen */
+const KEEP = [0, 4, 3, 1, 2];
 function stepsAllowed(){
-  if(!S.sess || S.mode!=="drill") return 7;
+  if(!S.sess || S.mode!=="drill") return MAX;
   const left = SESSION - S.sess.used, avg = S.avgAns || 8;
   const words = setRange(S.set).filter(i => S.items[i].level < MAX);
   const budget = left - words.filter(i => !S.items[i].in).length * 8 - words.length * avg;   /* new-word cards + checkpoint */
-  for(let k = 7; k >= 2; k--){
+  for(let k = MAX; k >= 2; k--){
     const kept = KEEP.slice(0, k);
     const need = words.reduce((a,i) => a + kept.filter(st => st >= S.items[i].level).length, 0) * avg;
     if(need <= budget) return k;
@@ -1895,7 +1993,7 @@ function mixRound(){
   if(pool.some(s => s.words.length >= 2) || new Set(pool.map(s => s.words[0])).size >= 2) kinds.push("gaps");
   if(learnedIdx().length >= 2) kinds.push("listen");
   if(!kinds.length) return null;
-  const k = shuffle(kinds.filter(x => x !== S.mixLast))[0] || kinds[0];
+  const k = (kinds.includes("listen") && S.mixLast !== "listen" && Math.random() < .5) ? "listen" : (shuffle(kinds.filter(x => x !== S.mixLast))[0] || kinds[0]);
   S.mixLast = k;
   if(k==="build"){ const ok = pool.filter(s => { const n = tokens(s.fr).length; return n >= 3 && n <= 9 && !(S.built||[]).includes(s.fr); }); const s = (ok.length ? ok : pool.filter(s => { const n = tokens(s.fr).length; return n >= 3 && n <= 9; })); return () => renderBuildSentence(s[Math.floor(Math.random()*s.length)]); }
   if(k==="gaps") return () => renderGaps(pool);
